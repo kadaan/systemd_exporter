@@ -1,6 +1,7 @@
 ## master / unreleased
 
 * systemd_service_restart_total changed label name from `type` to `name` to be more compatible with Node Exporter.
+* read cpu statistics from the cpu controller instead of the cpuacct controller
 
 ## 0.4.0 / 2020-04-23
 
