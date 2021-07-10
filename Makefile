@@ -2,6 +2,9 @@ all::
 
 # Needs to be defined before including Makefile.common to auto-generate targets
 DOCKER_ARCHS ?= amd64 armv7 arm64 ppc64le s390x
+LINT_FLAGS := run --deadline=120s
+LINTER := ./bin/golangci-lint
+TEST_FLAGS := -v -cover -race -coverprofile=coverage.txt -covermode=atomic
 
 include Makefile.common
 
@@ -9,7 +12,7 @@ PROMTOOL_VERSION ?= 2.5.0
 PROMTOOL_URL     ?= https://github.com/prometheus/prometheus/releases/download/v$(PROMTOOL_VERSION)/prometheus-$(PROMTOOL_VERSION).$(GO_BUILD_PLATFORM).tar.gz
 PROMTOOL         ?= $(FIRST_GOPATH)/bin/promtool
 
-DOCKER_REPO             ?=povilasv
+DOCKER_REPO             ?= povilasv
 DOCKER_IMAGE_NAME       ?= systemd-exporter
 MACH                    ?= $(shell uname -m)
 
@@ -55,3 +58,11 @@ $(PROMTOOL):
 	cp $(PROMTOOL_TMP)/prometheus-$(PROMTOOL_VERSION).$(GO_BUILD_PLATFORM)/promtool $(FIRST_GOPATH)/bin/promtool
 	rm -r $(PROMTOOL_TMP)
 
+.PHONY: test
+test:
+ifdef TRAVIS
+	sudo sh -c 'echo DefaultCPUAccounting=yes >> /etc/systemd/system.conf'  
+	sudo sh -c 'echo DefaultMemoryAccounting=yes >> /etc/systemd/system.conf'
+	sudo systemctl daemon-reload
+endif 
+	go test $(TEST_FLAGS) ./...
