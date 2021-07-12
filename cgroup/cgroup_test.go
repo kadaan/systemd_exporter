@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	testFixturesHybrid = "fixtures/cgroup-hybrid"
+	testFixturesUnified = "fixtures/cgroup-unified"
+	testFixturesLegacy = "fixtures/cgroup-legacy"
 )
 
 func TestMountModeParsing(t *testing.T) {
@@ -40,7 +41,7 @@ func TestCgUnifiedCached(t *testing.T) {
 	unifiedMount := func(path string, stat *unix.Statfs_t) error {
 		// unified fs present
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = cgroup2SuperMagic
 			return nil
 		default:
@@ -49,53 +50,53 @@ func TestCgUnifiedCached(t *testing.T) {
 	}
 	hybridMountSystemdV232 := func(path string, stat *unix.Statfs_t) error {
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = tmpFsMagic
-		case "/sys/fs/cgroup/systemd/":
+		case SystemdMountPoint:
 			stat.Type = cgroup2SuperMagic
 		}
 		return nil
 	}
 	hybridMountSystemdV233 := func(path string, stat *unix.Statfs_t) error {
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = tmpFsMagic
-		case "/sys/fs/cgroup/unified/":
+		case UnifiedMountPoint:
 			stat.Type = cgroup2SuperMagic
-		case "/sys/fs/cgroup/systemd/":
+		case SystemdMountPoint:
 			stat.Type = cgroupSuperMagic
 		}
 		return nil
 	}
 	legacyMount := func(path string, stat *unix.Statfs_t) error {
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = tmpFsMagic
-		case "/sys/fs/cgroup/unified/":
+		case UnifiedMountPoint:
 			return errors.New("pretend unified path not found")
-		case "/sys/fs/cgroup/systemd/":
+		case SystemdMountPoint:
 			stat.Type = cgroupSuperMagic
 		}
 		return nil
 	}
 	missingSystemdFolder := func(path string, stat *unix.Statfs_t) error {
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = tmpFsMagic
-		case "/sys/fs/cgroup/unified/":
+		case UnifiedMountPoint:
 			return errors.New("pretend unified path not found")
-		case "/sys/fs/cgroup/systemd/":
+		case SystemdMountPoint:
 			return errors.New("pretend we cannot stat systemd dir")
 		}
 		return nil
 	}
 	unknownSystemdFolderMountType := func(path string, stat *unix.Statfs_t) error {
 		switch path {
-		case "/sys/fs/cgroup/":
+		case DefaultMountPoint:
 			stat.Type = tmpFsMagic
-		case "/sys/fs/cgroup/unified/":
+		case UnifiedMountPoint:
 			return errors.New("pretend unified path not found")
-		case "/sys/fs/cgroup/systemd/":
+		case SystemdMountPoint:
 			stat.Type = 0x0
 		}
 		return nil
@@ -119,7 +120,7 @@ func TestCgUnifiedCached(t *testing.T) {
 
 	for _, table := range tables {
 		statfsFunc = table.statFn
-		mode, err := cgUnifiedCached()
+		mode, _, _, err := cgUnifiedCached()
 		if table.errExpected && err == nil {
 			t.Errorf("%s: expected an err, but got mode %s with no error", table.name, mode)
 		}
@@ -133,41 +134,87 @@ func TestCgUnifiedCached(t *testing.T) {
 }
 
 func TestNewFS(t *testing.T) {
-	if _, err := NewFS(MountModeUnknown); err == nil {
+	if _, err := NewFS(MountModeUnknown, "foobar", ""); err == nil {
 		t.Error("NewFS should have failed with non-existing path")
 	}
 
-	if _, err := NewFS(MountModeUnknown); err == nil {
+	if _, err := NewFS(MountModeUnknown, "", "cgroups_test.go"); err == nil {
 		t.Error("want NewFS to fail if mount point is not a dir")
 	}
 
-	if _, err := NewFS(MountModeUnknown); err != nil {
+	if _, err := NewFS(MountModeUnknown, testFixturesUnified, testFixturesLegacy); err != nil {
 		t.Error("want NewFS to succeed if mount point exists")
 	}
 }
 
-func getHybridFixtures(t *testing.T) FS {
-	fs, err := NewFS(MountModeHybrid)
+func getUnifiedFixtures(t *testing.T) FS {
+	fs, err := NewFS(MountModeUnified, testFixturesUnified, "")
 	if err != nil {
-		t.Fatal("Unable to create hybrid text fixtures")
+		t.Fatal("Unable to create unified test fixtures")
 	}
 	return fs
 }
 
-func TestCgSubpath(t *testing.T) {
+func getHybridFixtures(t *testing.T) FS {
+	fs, err := NewFS(MountModeHybrid, testFixturesUnified, testFixturesLegacy)
+	if err != nil {
+		t.Fatal("Unable to create hybrid test fixtures")
+	}
+	return fs
+}
+
+func getLegacyFixtures(t *testing.T) FS {
+	fs, err := NewFS(MountModeLegacy, "", testFixturesLegacy)
+	if err != nil {
+		t.Fatal("Unable to create legacy test fixtures")
+	}
+	return fs
+}
+
+func TestCgSubpathCPU(t *testing.T) {
+	controller := "cpu"
+	subpath := "/system.slice"
+	suffix := "cpu.stat"
+
 	fs := getHybridFixtures(t)
 
 	fs.cgroupUnified = MountModeUnknown
-	if _, err := fs.cgGetPath("cpu", "/system.slice", "cpuacct.usage_all"); err == nil {
-		t.Error("should not be able to determine path with unknown mount mode")
+	if _, err := fs.cgGetPath(controller, subpath, suffix); err == nil {
+		t.Errorf("should not be able to determine path with unknown mount mode: %s", err)
 	}
-	fs.cgroupUnified = MountModeHybrid
-	path, err := fs.cgGetPath("cpu", "/system.slice", "cpuacct.usage_all")
+
+	verifyControllerPath(t, MountModeLegacy, controller, subpath, suffix, testFixturesLegacy+"/cpu/system.slice/cpu.stat")
+	verifyControllerPath(t, MountModeHybrid, controller, subpath, suffix, testFixturesUnified+"/system.slice/cpu.stat")
+	verifyControllerPath(t, MountModeUnified, controller, subpath, suffix, testFixturesUnified+"/system.slice/cpu.stat")
+}
+
+func TestCgSubpathMemory(t *testing.T) {
+	controller := "mem"
+	subpath := "/system.slice"
+	suffix := "memory.stat"
+
+	fs := getHybridFixtures(t)
+
+	fs.cgroupUnified = MountModeUnknown
+	if _, err := fs.cgGetPath(controller, subpath, suffix); err == nil {
+		t.Errorf("should not be able to determine path with unknown mount mode: %s", err)
+	}
+
+	verifyControllerPath(t, MountModeLegacy, controller, subpath, suffix, testFixturesLegacy+"/mem/system.slice/memory.stat")
+	verifyControllerPath(t, MountModeHybrid, controller, subpath, suffix, testFixturesLegacy+"/mem/system.slice/memory.stat")
+	verifyControllerPath(t, MountModeUnified, controller, subpath, suffix, testFixturesUnified+"/system.slice/memory.stat")
+}
+
+func verifyControllerPath(t *testing.T, mountMode MountMode, controller string, subpath string, suffix string, expected string) {
+	fs := getHybridFixtures(t)
+	fs.cgroupUnified = mountMode
+
+	path, err := fs.cgGetPath(controller, subpath, suffix)
 	if err != nil {
-		t.Error("should be able to determine path with systemd mount mode")
+		t.Errorf("should be able to determine path with %s mount mode: %s", mountMode, err)
 	}
-	want := testFixturesHybrid + "/cpu/system.slice/cpuacct.usage_all"
-	if path != want {
-		t.Errorf("bad response. Wanted %s, got %s", want, path)
+
+	if path != expected {
+		t.Errorf("bad response for %s. Wanted %s, got %s", mountMode, expected, path)
 	}
 }

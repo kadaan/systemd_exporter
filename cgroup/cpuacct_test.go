@@ -3,7 +3,7 @@ package cgroup
 import "testing"
 
 func TestNewCPUAcct(t *testing.T) {
-	fs := getHybridFixtures(t)
+	fs := getLegacyFixtures(t)
 	cpu, err := fs.NewCPUAcct("/")
 	if err != nil {
 		t.Errorf("want NewCPUAcct('/') to succeed: %s", err)

@@ -12,8 +12,18 @@ func NewCPUUsage(cgSubpath string) (TotalCPUUsage, error) {
 	}
 
 	if fs.cgroupUnified == MountModeUnified || fs.cgroupUnified == MountModeHybrid {
-		return fs.NewCPUStat(cgSubpath)
+		ret, err2 := fs.NewCPUStat(cgSubpath)
+		if ret == nil {
+			return nil, err2
+		} else {
+			return ret, nil
+		}
 	} else {
-		return fs.NewCPUAcct(cgSubpath)
+		ret, err2 := fs.NewCPUAcct(cgSubpath)
+		if ret == nil {
+			return nil, err2
+		} else {
+			return ret, nil
+		}
 	}
 }
