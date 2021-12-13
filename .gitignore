@@ -1,4 +1,4 @@
-/systemd_exporter
-/bin/golangci-lint
-.idea
+.bin/
+.idea/
+dist/
 coverage.txt

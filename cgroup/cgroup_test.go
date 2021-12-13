@@ -1,3 +1,18 @@
+// Copyright © 2021 Joel Baranick <jbaranick@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at:
+//
+// 	  http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cgroup
 
 import (
@@ -9,7 +24,7 @@ import (
 
 const (
 	testFixturesUnified = "fixtures/cgroup-unified"
-	testFixturesLegacy = "fixtures/cgroup-legacy"
+	testFixturesLegacy  = "fixtures/cgroup-legacy"
 )
 
 func TestMountModeParsing(t *testing.T) {
@@ -22,7 +37,7 @@ func TestMountModeParsing(t *testing.T) {
 		return
 	}
 
-	if _, err := NewDefaultFS(); err != nil {
+	if _, err := NewDefaultFS(Auto, ""); err != nil {
 		t.Errorf("expected success determining mount type inside of travis CI: %s", err)
 	}
 }
@@ -120,7 +135,7 @@ func TestCgUnifiedCached(t *testing.T) {
 
 	for _, table := range tables {
 		statfsFunc = table.statFn
-		mode, _, _, err := cgUnifiedCached()
+		mode, _, _, err := cgUnifiedCached(Auto, "")
 		if table.errExpected && err == nil {
 			t.Errorf("%s: expected an err, but got mode %s with no error", table.name, mode)
 		}
@@ -134,29 +149,21 @@ func TestCgUnifiedCached(t *testing.T) {
 }
 
 func TestNewFS(t *testing.T) {
-	if _, err := NewFS(MountModeUnknown, "foobar", ""); err == nil {
+	if _, err := newFS(MountModeUnknown, "foobar", ""); err == nil {
 		t.Error("NewFS should have failed with non-existing path")
 	}
 
-	if _, err := NewFS(MountModeUnknown, "", "cgroups_test.go"); err == nil {
+	if _, err := newFS(MountModeUnknown, "", "cgroups_test.go"); err == nil {
 		t.Error("want NewFS to fail if mount point is not a dir")
 	}
 
-	if _, err := NewFS(MountModeUnknown, testFixturesUnified, testFixturesLegacy); err != nil {
+	if _, err := newFS(MountModeUnknown, testFixturesUnified, testFixturesLegacy); err != nil {
 		t.Error("want NewFS to succeed if mount point exists")
 	}
 }
 
-func getUnifiedFixtures(t *testing.T) FS {
-	fs, err := NewFS(MountModeUnified, testFixturesUnified, "")
-	if err != nil {
-		t.Fatal("Unable to create unified test fixtures")
-	}
-	return fs
-}
-
 func getHybridFixtures(t *testing.T) FS {
-	fs, err := NewFS(MountModeHybrid, testFixturesUnified, testFixturesLegacy)
+	fs, err := newFS(MountModeHybrid, testFixturesUnified, testFixturesLegacy)
 	if err != nil {
 		t.Fatal("Unable to create hybrid test fixtures")
 	}
@@ -164,7 +171,7 @@ func getHybridFixtures(t *testing.T) FS {
 }
 
 func getLegacyFixtures(t *testing.T) FS {
-	fs, err := NewFS(MountModeLegacy, "", testFixturesLegacy)
+	fs, err := newFS(MountModeLegacy, "", testFixturesLegacy)
 	if err != nil {
 		t.Fatal("Unable to create legacy test fixtures")
 	}

@@ -1,3 +1,18 @@
+// Copyright © 2021 Joel Baranick <jbaranick@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at:
+//
+// 	  http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cgroup
 
 import (
@@ -203,8 +218,8 @@ func parseMemStat(r io.Reader) (*MemStat, error) {
 
 // NewMemStat will locate and read the kernel's cpu accounting info for
 // the provided systemd cgroup subpath.
-func NewMemStat(cgSubpath string) (MemStat, error) {
-	fs, err := NewDefaultFS()
+func NewMemStat(controlGroupMode ControlGroupMode, mountPointPrefix string, cgSubpath string) (MemStat, error) {
+	fs, err := NewDefaultFS(controlGroupMode, mountPointPrefix)
 	if err != nil {
 		return MemStat{}, err
 	}

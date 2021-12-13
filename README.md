@@ -46,7 +46,8 @@ on all systems.
 # Systemd versions
 
 There is varying support for different metrics based on systemd version. 
-Flags that come from newer systemd versions are disabled by default to avoid breaking things for users using older systemd versions. Try enabling different flags, to see what works on your system.
+Flags that come from newer systemd versions are disabled by default to avoid breaking things for users using older 
+systemd versions. Try enabling different flags, to see what works on your system.
 
 Optional Flags:
 
@@ -56,7 +57,9 @@ Name     | Description |
 --collector.enable-file-descriptor-size | Enables file descriptor size metrics. Systemd Exporter needs access to /proc/X/fd files.
 --collector.enable-ip-accounting | Enables service ip accounting metrics. This feature only works with systemd 235 and above.
 
-Of note, there is no customized support for `.snapshot` (removed in systemd v228), `.busname` (only present on systems using kdbus), `generated` (created via generators), `transient` (created during systemd-run) have no special support. 
+Of note, there is no customized support for `.snapshot` (removed in systemd v228), `.busname` 
+(only present on systems using kdbus), `generated` (created via generators), `transient` 
+(created during systemd-run) have no special support. 
 
 # Deployment
 
@@ -104,10 +107,23 @@ Note that a number of unit types are filtered by default
 
 ## Configuration
 
-systemd_exporter allows you to include/exclude some systemd units. You can use `--collector.unit-whitelist` and `--collector.unit-blacklist` to select wanted units. Both of these options are in [RE2](https://github.com/google/re2/wiki/Syntax) syntax. For example:
+systemd_exporter allows you to include/exclude some systemd units. You can use `--collector.unit-allowlist` and 
+`--collector.unit-blocklist` to select wanted units. Both of these options are in [RE2](https://github.com/google/re2/wiki/Syntax) syntax. 
 
+For example:
 ```
 args:
-  - --collector.unit-whitelist=.*ceph.*\.service|ceph.*\.timer|kubelet.service|docker.service
-  - --collector.unit-blacklist=ceph-volume.*\.service
+  - --collector.unit-allowlist=.*ceph.*\.service|ceph.*\.timer|kubelet.service|docker.service
+  - --collector.unit-blocklist=ceph-volume.*\.service
 ```
+
+# Repository history and credits
+- the code was written by [@povilasv](https://github.com/povilasv) in this [repository](https://github.com/povilasv/systemd_exporter).
+- [@flaktack](https://github.com/flaktack/systemd_exporter) and co-contributors fixed cgroup handling and did a first clean-up
+- I have added support for running systemd_exporter in an unpriviledge, rootless container
+
+# License
+See [repository history and credits](#repository-history-and-credits) for acknowledgments. The work on this repository
+was done in 2021 by kadaan.
+
+Licensed under the [Apache License, Version 2.0](LICENSE)

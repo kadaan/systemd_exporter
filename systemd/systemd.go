@@ -1,9 +1,25 @@
+// Copyright © 2021 Joel Baranick <jbaranick@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at:
+//
+// 	  http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package systemd
 
 import (
 	"fmt"
 	"math"
 	"os"
+	"strconv"
 
 	// Register pprof-over-http handlers
 	_ "net/http/pprof"
@@ -13,25 +29,29 @@ import (
 	"time"
 
 	"github.com/coreos/go-systemd/dbus"
+	godbus "github.com/godbus/dbus"
+	"github.com/kadaan/systemd_exporter/cgroup"
 	"github.com/pkg/errors"
-	"github.com/povilasv/systemd_exporter/cgroup"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/procfs"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 const namespace = "systemd"
 
 var (
-	unitWhitelist             = kingpin.Flag("collector.unit-whitelist", "Regexp of systemd units to whitelist. Units must both match whitelist and not match blacklist to be included.").Default(".+").String()
-	unitBlacklist             = kingpin.Flag("collector.unit-blacklist", "Regexp of systemd units to blacklist. Units must both match whitelist and not match blacklist to be included.").Default(".+\\.(device)").String()
+	unitAllowlist             = kingpin.Flag("collector.unit-allowlist", "Regexp of systemd units to allow. Units must both match allowlist and not match blocklist to be included.").Default(".+").String()
+	unitBlocklist             = kingpin.Flag("collector.unit-blocklist", "Regexp of systemd units to block. Units must both match allowlist and not match blocklist to be included.").Default(".+\\.(device)").String()
 	systemdPrivate            = kingpin.Flag("collector.private", "Establish a private, direct connection to systemd without dbus.").Bool()
 	systemdUser               = kingpin.Flag("collector.user", "Connect to the user systemd instance.").Bool()
 	procPath                  = kingpin.Flag("path.procfs", "procfs mountpoint.").Default(procfs.DefaultMountPoint).String()
 	enableRestartsMetrics     = kingpin.Flag("collector.enable-restart-count", "Enables service restart count metrics. This feature only works with systemd 235 and above.").Bool()
 	enableFDMetrics           = kingpin.Flag("collector.enable-file-descriptor-size", "Enables file descriptor size metrics. Systemd Exporter needs access to /proc/X/fd for this to work.").Bool()
 	enableIPAccountingMetrics = kingpin.Flag("collector.enable-ip-accounting", "Enables service ip accounting metrics. This feature only works with systemd 235 and above.").Bool()
+	controlGroupMode          = kingpin.Flag("collector.control-group-mode", "Control group mode").Default(cgroup.Auto.String()).Enum(cgroup.ControlGroupModeStrings()...)
+	controlGroupMountPrefix   = kingpin.Flag("collector.control-group-mount-prefix", "Control group mount prefix").Default("").String()
+	uid                       = kingpin.Flag("collector.uid", "UID when in connecting to the user systemd instance").Default(strconv.Itoa(os.Getuid())).Int()
 )
 
 var unitStatesName = []string{"active", "activating", "deactivating", "inactive", "failed"}
@@ -47,7 +67,11 @@ var (
 )
 
 type Collector struct {
-	logger                        log.Logger
+	logger log.Logger
+
+	controlGroupMode        cgroup.ControlGroupMode
+	controlGroupMountPrefix string
+
 	unitState                     *prometheus.Desc
 	unitInfo                      *prometheus.Desc
 	unitStartTimeDesc             *prometheus.Desc
@@ -219,10 +243,17 @@ func NewCollector(logger log.Logger) (*Collector, error) {
 		"Service unit egress IP accounting in packets.",
 		[]string{"name"}, nil,
 	)
-	unitWhitelistPattern := regexp.MustCompile(fmt.Sprintf("^(?:%s)$", *unitWhitelist))
-	unitBlacklistPattern := regexp.MustCompile(fmt.Sprintf("^(?:%s)$", *unitBlacklist))
+	unitWhitelistPattern := regexp.MustCompile(fmt.Sprintf("^(?:%s)$", *unitAllowlist))
+	unitBlacklistPattern := regexp.MustCompile(fmt.Sprintf("^(?:%s)$", *unitBlocklist))
+
+	mode, err := cgroup.ControlGroupModeString(*controlGroupMode)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Collector{
+		controlGroupMode:              mode,
+		controlGroupMountPrefix:       *controlGroupMountPrefix,
 		logger:                        logger,
 		unitState:                     unitState,
 		unitInfo:                      unitInfo,
@@ -639,7 +670,7 @@ func (c *Collector) getControlGroup(conn *dbus.Conn, unit dbus.UnitStatus) (*str
 func (c *Collector) collectUnitCPUUsageMetrics(cgSubpath string, ch chan<- prometheus.Metric, unit dbus.UnitStatus) error {
 	// Don't bother reading CPUAccounting prop. It's faster to attempt a file read than to query dbus, and it works
 	// in more situations as well
-	cpuUsage, err := cgroup.NewCPUUsage(cgSubpath)
+	cpuUsage, err := cgroup.NewCPUUsage(c.controlGroupMode, c.controlGroupMountPrefix, cgSubpath)
 	if err != nil {
 		if perr, ok := err.(*os.PathError); ok && perr.Op == "open" {
 			return nil
@@ -667,7 +698,7 @@ func (c *Collector) collectUnitMemMetrics(cgSubpath string, ch chan<- prometheus
 	// in more situations as well. For ex: case where
 	// such as kernel cmdline has cgroups_enabled=memory but systemd still has DefaultMemoryAccounting=no. All cgroups
 	// will have a memory.stat file, but systemd will still report MemoryAccounting=false for most units
-	memStat, err := cgroup.NewMemStat(cgSubpath)
+	memStat, err := cgroup.NewMemStat(c.controlGroupMode, c.controlGroupMountPrefix, cgSubpath)
 	if err != nil {
 		if perr, ok := err.(*os.PathError); ok && perr.Op == "open" {
 			return nil
@@ -807,9 +838,49 @@ func (c *Collector) newDbus() (*dbus.Conn, error) {
 		return dbus.NewSystemdConnection()
 	}
 	if *systemdUser {
-		return dbus.NewUserConnection()
+		return newUserConnection()
 	}
 	return dbus.New()
+}
+
+func newUserConnection() (*dbus.Conn, error) {
+	return dbus.NewConnection(func() (*godbus.Conn, error) {
+		return dbusAuthHelloConnection(godbus.SessionBusPrivate)
+	})
+}
+
+func dbusAuthHelloConnection(createBus func(opts ...godbus.ConnOption) (*godbus.Conn, error)) (*godbus.Conn, error) {
+	conn, err := dbusAuthConnection(createBus)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = conn.Hello(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+func dbusAuthConnection(createBus func(opts ...godbus.ConnOption) (*godbus.Conn, error)) (*godbus.Conn, error) {
+	conn, err := createBus()
+	if err != nil {
+		return nil, err
+	}
+
+	// Only use EXTERNAL method, and uid (not username) to avoid
+	// a username lookup (which requires a dynamically linked
+	// libc)
+	methods := []godbus.Auth{godbus.AuthExternal(strconv.Itoa(*uid))}
+
+	err = conn.Auth(methods)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 func filterUnits(units []dbus.UnitStatus, whitelistPattern, blacklistPattern *regexp.Regexp) []dbus.UnitStatus {

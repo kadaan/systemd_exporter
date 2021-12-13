@@ -1,3 +1,18 @@
+// Copyright © 2021 Joel Baranick <jbaranick@gmail.com>
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at:
+//
+// 	  http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cgroup
 
 import (
@@ -17,7 +32,7 @@ type FS struct {
 	cgroupUnified MountMode
 
 	unifiedPath string
-	legacyPath string
+	legacyPath  string
 }
 
 // DefaultMountPoint is the common mount point of the cgroupfs filesystem
@@ -30,19 +45,18 @@ const SystemdMountPoint = "/sys/fs/cgroup/systemd"
 // NewDefaultFS returns a new cgroup FS mounted under the default mountPoint.
 // It will error if cgroup hierarchies are not laid out in a manner understood
 // by systemd.
-func NewDefaultFS() (FS, error) {
-
-	mode, unifiedPath, legacyPath, err := cgUnifiedCached()
+func NewDefaultFS(controlGroupMode ControlGroupMode, mountPointPrefix string) (FS, error) {
+	mode, unifiedPath, legacyPath, err := cgUnifiedCached(controlGroupMode, mountPointPrefix)
 	if err != nil || mode == MountModeUnknown {
 		return FS{}, fmt.Errorf("could not determine cgroupfs mount mode: %s", err)
 	}
 
-	return NewFS(mode, unifiedPath, legacyPath)
+	return newFS(mode, unifiedPath, legacyPath)
 }
 
 // NewFS returns a new cgroup FS mounted under the given mountPoint. It does not check
 // the provided mount mode
-func NewFS(mountMode MountMode, unifiedPath string, legacyPath string) (FS, error) {
+func newFS(mountMode MountMode, unifiedPath string, legacyPath string) (FS, error) {
 	if unifiedPath != "" {
 		if err := checkMountPath(unifiedPath); err != nil {
 			return FS{}, err
@@ -118,49 +132,89 @@ const (
 // Equivalent to systemd cgroup-util.c#cg_unified_cached
 var statfsFunc = unix.Statfs
 
-func cgUnifiedCached() (MountMode, string, string, error) {
+func cgUnifiedCached(mode ControlGroupMode, mountPrintPrefix string) (MountMode, string, string, error) {
 	// if cgroupUnified != MountModeUnknown {
 	// 	return cgroupUnified, nil
 	// }
+	defaultMountPoint := prefixMountPoint(mountPrintPrefix, DefaultMountPoint)
+	unifiedMountPoint := prefixMountPoint(mountPrintPrefix, UnifiedMountPoint)
+	systemdMountPoint := prefixMountPoint(mountPrintPrefix, SystemdMountPoint)
+
+	switch mode {
+	case Auto:
+		break
+	case Legacy:
+		log.Debugf("Explicitly enabled cgroup on %s, legacy hierarchy", defaultMountPoint)
+		return MountModeLegacy, "", defaultMountPoint, nil
+	case UnifiedV232:
+		log.Debugf("Explicitly enabled cgroup2 on %s, unified hierarchy for systemd controller (v232 variant)", systemdMountPoint)
+		return MountModeHybrid, unifiedMountPoint, systemdMountPoint, nil
+	case Unified:
+		log.Debugf("Explicitly enabled cgroup2 on %s, unified hierarchy for systemd controller", unifiedMountPoint)
+		return MountModeHybrid, defaultMountPoint, "", nil
+	default:
+		return MountModeUnknown, "", "", errors.Errorf("unknown control group mode %s", mode)
+	}
 
 	var fs unix.Statfs_t
-	err := statfsFunc(DefaultMountPoint, &fs)
+	if mode == Auto {
+		err := statfsFunc(defaultMountPoint, &fs)
+		if err != nil {
+			return MountModeUnknown, "", "", errors.Wrapf(err, "failed statfs(%s)", defaultMountPoint)
+		}
+	}
+
+	if fs.Type == cgroup2SuperMagic || mode == Unified {
+		if mode == Unified {
+			log.Debugf("Found cgroup2 on %s, full unified hierarchy", defaultMountPoint)
+		}
+		return MountModeUnified, defaultMountPoint, "", nil
+	}
+
+	err := statfsFunc(defaultMountPoint, &fs)
 	if err != nil {
-		return MountModeUnknown, "", "", errors.Wrapf(err, "failed statfs(%s)", DefaultMountPoint)
+		return MountModeUnknown, "", "", errors.Wrapf(err, "failed statfs(%s)", defaultMountPoint)
 	}
 
 	switch fs.Type {
 	case cgroup2SuperMagic:
-		log.Debugf("Found cgroup2 on %s, full unified hierarchy", DefaultMountPoint)
-		return MountModeUnified, DefaultMountPoint, "", nil
+		log.Debugf("Found cgroup2 on %s, full unified hierarchy", defaultMountPoint)
+		return MountModeUnified, defaultMountPoint, "", nil
 	case tmpFsMagic:
-		err := statfsFunc(UnifiedMountPoint, &fs)
+		err := statfsFunc(unifiedMountPoint, &fs)
 
 		// Ignore err, we expect path to be missing on v232
 		if err == nil && fs.Type == cgroup2SuperMagic {
-			log.Debugf("Found cgroup2 on %s, unified hierarchy for systemd controller", UnifiedMountPoint)
-			return MountModeHybrid, UnifiedMountPoint, DefaultMountPoint, nil
+			log.Debugf("Found cgroup2 on %s, unified hierarchy for systemd controller", unifiedMountPoint)
+			return MountModeHybrid, unifiedMountPoint, defaultMountPoint, nil
 		}
 
-		err = statfsFunc(SystemdMountPoint, &fs)
+		err = statfsFunc(systemdMountPoint, &fs)
 		if err != nil {
-			return MountModeUnknown, "", "", errors.Wrapf(err, "failed statfs(%s)", SystemdMountPoint)
+			return MountModeUnknown, "", "", errors.Wrapf(err, "failed statfs(%s)", systemdMountPoint)
 		}
 
 		switch fs.Type {
 		case cgroup2SuperMagic:
-			log.Debugf("Found cgroup2 on %s, unified hierarchy for systemd controller (v232 variant)", SystemdMountPoint)
-			return MountModeHybrid, UnifiedMountPoint, SystemdMountPoint, nil
+			log.Debugf("Found cgroup2 on %s, unified hierarchy for systemd controller (v232 variant)", systemdMountPoint)
+			return MountModeHybrid, unifiedMountPoint, systemdMountPoint, nil
 		case cgroupSuperMagic:
-			log.Debugf("Found cgroup on %s, legacy hierarchy", SystemdMountPoint)
-			return MountModeLegacy, "", DefaultMountPoint, nil
+			log.Debugf("Found cgroup on %s, legacy hierarchy", defaultMountPoint)
+			return MountModeLegacy, "", defaultMountPoint, nil
 		default:
-			return MountModeUnknown, "", "", errors.Errorf("unknown magic number %x for fstype returned by statfs(%s)", fs.Type, SystemdMountPoint)
+			return MountModeUnknown, "", "", errors.Errorf("unknown magic number %x for fstype returned by statfs(%s)", fs.Type, systemdMountPoint)
 		}
 
 	default:
-		return MountModeUnknown, "", "", errors.Errorf("unknown magic number %x for fstype returned by statfs(%s)", fs.Type, DefaultMountPoint)
+		return MountModeUnknown, "", "", errors.Errorf("unknown magic number %x for fstype returned by statfs(%s)", fs.Type, defaultMountPoint)
 	}
+}
+
+func prefixMountPoint(prefix string, mountPoint string) string {
+	if len(prefix) > 0 {
+		return filepath.Join(prefix, mountPoint)
+	}
+	return mountPoint
 }
 
 // cgGetPath returns the absolute path for a specific file in a specific controller
